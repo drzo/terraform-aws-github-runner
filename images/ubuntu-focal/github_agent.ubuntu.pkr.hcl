@@ -102,12 +102,13 @@ variable "instance_profile" {
 }
 
 source "amazon-ebs" "githubrunner" {
-  ami_name                    = "github-runner-ubuntu-focal-amd64-${formatdate("YYYYMMDDhhmm", timestamp())}"
-  instance_type               = var.instance_type
-  region                      = var.region
-  security_group_id           = var.security_group_id
-  subnet_id                   = var.subnet_id
-  associate_public_ip_address = var.associate_public_ip_address
+  ami_name                                  = "github-runner-ubuntu-focal-amd64-${formatdate("YYYYMMDDhhmm", timestamp())}"
+  instance_type                             = var.instance_type
+  region                                    = var.region
+  security_group_id                         = var.security_group_id
+  subnet_id                                 = var.subnet_id
+  associate_public_ip_address               = var.associate_public_ip_address
+  temporary_security_group_source_public_ip = var.temporary_security_group_source_public_ip
 
   source_ami_filter {
     filters = {
@@ -119,6 +120,7 @@ source "amazon-ebs" "githubrunner" {
     owners      = ["099720109477"]
   }
   iam_instance_profile = var.instance_profile
+  ssh_username = "ubuntu"
   tags = merge(
     var.global_tags,
     var.ami_tags,
@@ -150,6 +152,7 @@ build {
       "DEBIAN_FRONTEND=noninteractive"
     ]
     inline = concat([
+      "sudo cloud-init status --wait",
       "sudo apt-get -y update",
       "sudo apt-get -y install ca-certificates curl gnupg lsb-release",
       "sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg",
@@ -181,7 +184,7 @@ build {
 
   provisioner "shell" {
     environment_vars = [
-      "RUNNER_TARBALL_URL=https://github.com/actions/runner/releases/download/v${var.runner_version}/actions-runner-linux-x64-${var.runner_version}.tar.gz"
+      "RUNNER_TARBALL_URL=https://github.com/actions/runner/releases/download/v${local.runner_version}/actions-runner-linux-x64-${local.runner_version}.tar.gz"
     ]
     inline = [
       "sudo chmod +x /tmp/install-runner.sh",
@@ -193,7 +196,7 @@ build {
 
   provisioner "file" {
     content = templatefile("../start-runner.sh", {
-      start_runner = templatefile("../../modules/runners/templates/start-runner.sh", {})
+      start_runner = templatefile("../../modules/runners/templates/start-runner.sh", { metadata_tags = "enabled" })
     })
     destination = "/tmp/start-runner.sh"
   }
@@ -204,5 +207,8 @@ build {
       "sudo chmod +x /var/lib/cloud/scripts/per-boot/start-runner.sh",
     ]
   }
-
+  post-processor "manifest" {
+    output     = "manifest.json"
+    strip_path = true
+  }
 }
