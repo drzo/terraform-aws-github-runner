@@ -9,7 +9,7 @@ variable "vpc_id" {
 }
 
 variable "subnet_ids" {
-  description = "List of subnets in which the action runners will be launched, the subnets needs to be subnets in the `vpc_id`."
+  description = "List of subnets in which the action runner instances will be launched. The subnets need to exist in the configured VPC (`vpc_id`), and must reside in different availability zones (see https://github.com/philips-labs/terraform-aws-github-runner/issues/2904)"
   type        = list(string)
 }
 
@@ -58,7 +58,7 @@ variable "scale_down_schedule_expression" {
 }
 
 variable "minimum_running_time_in_minutes" {
-  description = "The time an ec2 action runner should be running at minimum before terminated if not busy."
+  description = "The time an ec2 action runner should be running at minimum before terminated, if not busy."
   type        = number
   default     = null
 }
@@ -132,7 +132,19 @@ variable "runner_binaries_syncer_lambda_timeout" {
 variable "runner_binaries_s3_sse_configuration" {
   description = "Map containing server-side encryption configuration for runner-binaries S3 bucket."
   type        = any
-  default     = {}
+  default = {
+    rule = {
+      apply_server_side_encryption_by_default = {
+        sse_algorithm = "AES256"
+      }
+    }
+  }
+}
+
+variable "runner_binaries_s3_versioning" {
+  description = "Status of S3 versioning for runner-binaries S3 bucket. Once set to Enabled the change cannot be reverted via Terraform!"
+  type        = string
+  default     = "Disabled"
 }
 
 variable "runner_binaries_s3_logging_bucket" {
@@ -208,7 +220,7 @@ variable "enable_runner_detailed_monitoring" {
   default     = false
 }
 
-variable "enabled_userdata" {
+variable "enable_userdata" {
   description = "Should the userdata script be enabled for the runner. Set this to false if you are using your own prebuilt AMI."
   type        = bool
   default     = true
@@ -233,17 +245,18 @@ variable "userdata_post_install" {
 }
 
 variable "idle_config" {
-  description = "List of time period that can be defined as cron expression to keep a minimum amount of runners active instead of scaling down to 0. By defining this list you can ensure that in time periods that match the cron expression within 5 seconds a runner is kept idle."
+  description = "List of time periods, defined as a cron expression, to keep a minimum amount of runners active instead of scaling down to 0. By defining this list you can ensure that in time periods that match the cron expression within 5 seconds a runner is kept idle."
   type = list(object({
-    cron      = string
-    timeZone  = string
-    idleCount = number
+    cron             = string
+    timeZone         = string
+    idleCount        = number
+    evictionStrategy = optional(string, "oldest_first")
   }))
   default = []
 }
 
 variable "enable_ssm_on_runners" {
-  description = "Enable to allow access the runner instances for debugging purposes via SSM. Note that this adds additional permissions to the runner instances."
+  description = "Enable to allow access to the runner instances for debugging purposes via SSM. Note that this adds additional permissions to the runner instances."
   type        = bool
   default     = false
 }
@@ -255,7 +268,7 @@ variable "logging_retention_in_days" {
 }
 
 variable "logging_kms_key_id" {
-  description = "Specifies the kms key id to encrypt the logs with"
+  description = "Specifies the kms key id to encrypt the logs with."
   type        = string
   default     = null
 }
@@ -274,33 +287,30 @@ variable "runner_allow_prerelease_binaries" {
 variable "block_device_mappings" {
   description = "The EC2 instance block device configuration. Takes the following keys: `device_name`, `delete_on_termination`, `volume_type`, `volume_size`, `encrypted`, `iops`, `throughput`, `kms_key_id`, `snapshot_id`."
   type = list(object({
-    delete_on_termination = bool
-    device_name           = string
-    encrypted             = bool
-    iops                  = number
-    kms_key_id            = string
-    snapshot_id           = string
-    throughput            = number
+    delete_on_termination = optional(bool, true)
+    device_name           = optional(string, "/dev/xvda")
+    encrypted             = optional(bool, true)
+    iops                  = optional(number)
+    kms_key_id            = optional(string)
+    snapshot_id           = optional(string)
+    throughput            = optional(number)
     volume_size           = number
-    volume_type           = string
+    volume_type           = optional(string, "gp3")
   }))
   default = [{
-    delete_on_termination = true
-    device_name           = "/dev/xvda"
-    encrypted             = true
-    iops                  = null
-    kms_key_id            = null
-    snapshot_id           = null
-    throughput            = null
-    volume_size           = 30
-    volume_type           = "gp3"
+    volume_size = 30
   }]
 }
 
 variable "ami_filter" {
-  description = "List of maps used to create the AMI filter for the action runner AMI. By default amazon linux 2 is used."
+  description = "Map of lists used to create the AMI filter for the action runner AMI."
   type        = map(list(string))
-  default     = null
+  default     = { state = ["available"] }
+  validation {
+    // check the availability of the AMI
+    condition     = contains(keys(var.ami_filter), "state")
+    error_message = "The \"ami_filter\" variable must contain the \"state\" key with the value \"available\"."
+  }
 }
 
 variable "ami_owners" {
@@ -315,28 +325,39 @@ variable "ami_id_ssm_parameter_name" {
   default     = null
 }
 
+variable "ami_kms_key_arn" {
+  description = "Optional CMK Key ARN to be used to launch an instance from a shared encrypted AMI"
+  type        = string
+  default     = null
+}
+
 variable "lambda_s3_bucket" {
   description = "S3 bucket from which to specify lambda functions. This is an alternative to providing local files directly."
+  type        = string
   default     = null
 }
 
 variable "syncer_lambda_s3_key" {
-  description = "S3 key for syncer lambda function. Required if using S3 bucket to specify lambdas."
+  description = "S3 key for syncer lambda function. Required if using an S3 bucket to specify lambdas."
+  type        = string
   default     = null
 }
 
 variable "syncer_lambda_s3_object_version" {
   description = "S3 object version for syncer lambda function. Useful if S3 versioning is enabled on source bucket."
+  type        = string
   default     = null
 }
 
 variable "webhook_lambda_s3_key" {
   description = "S3 key for webhook lambda function. Required if using S3 bucket to specify lambdas."
+  type        = string
   default     = null
 }
 
 variable "webhook_lambda_s3_object_version" {
   description = "S3 object version for webhook lambda function. Useful if S3 versioning is enabled on source bucket."
+  type        = string
   default     = null
 }
 
@@ -350,16 +371,18 @@ variable "webhook_lambda_apigateway_access_log_settings" {
 
 variable "runners_lambda_s3_key" {
   description = "S3 key for runners lambda function. Required if using S3 bucket to specify lambdas."
+  type        = string
   default     = null
 }
 
 variable "runners_lambda_s3_object_version" {
   description = "S3 object version for runners lambda function. Useful if S3 versioning is enabled on source bucket."
+  type        = string
   default     = null
 }
 
 variable "create_service_linked_role_spot" {
-  description = "(optional) create the serviced linked role for spot instances that is required by the scale-up lambda."
+  description = "(optional) create the service linked role for spot instances that is required by the scale-up lambda."
   type        = bool
   default     = false
 }
@@ -371,13 +394,13 @@ variable "runner_iam_role_managed_policy_arns" {
 }
 
 variable "enable_cloudwatch_agent" {
-  description = "Enabling the cloudwatch agent on the ec2 runner instances, the runner contains default config. Configuration can be overridden via `cloudwatch_config`."
+  description = "Enables the cloudwatch agent on the ec2 runner instances. The runner uses a default config that can be overridden via `cloudwatch_config`."
   type        = bool
   default     = true
 }
 
 variable "cloudwatch_config" {
-  description = "(optional) Replaces the module default cloudwatch log config. See https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html for details."
+  description = "(optional) Replaces the module's default cloudwatch log config. See https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Agent-Configuration-File-Details.html for details."
   type        = string
   default     = null
 }
@@ -424,20 +447,9 @@ variable "key_name" {
 }
 
 variable "runner_additional_security_group_ids" {
-  description = "(optional) List of additional security groups IDs to apply to the runner"
+  description = "(optional) List of additional security groups IDs to apply to the runner."
   type        = list(string)
   default     = []
-}
-
-variable "market_options" {
-  description = "DEPCRECATED: Replaced by `instance_target_capacity_type`."
-  type        = string
-  default     = null
-
-  validation {
-    condition     = anytrue([var.market_options == null])
-    error_message = "Deprecated, replaced by `instance_target_capacity_type`."
-  }
 }
 
 variable "instance_target_capacity_type" {
@@ -451,7 +463,7 @@ variable "instance_target_capacity_type" {
 }
 
 variable "instance_allocation_strategy" {
-  description = "The allocation strategy for spot instances. AWS recommends to use `price-capacity-optimized` however the AWS default is `lowest-price`."
+  description = "The allocation strategy for spot instances. AWS recommends using `price-capacity-optimized` however the AWS default is `lowest-price`."
   type        = string
   default     = "lowest-price"
   validation {
@@ -461,20 +473,9 @@ variable "instance_allocation_strategy" {
 }
 
 variable "instance_max_spot_price" {
-  description = "Max price price for spot intances per hour. This variable will be passed to the create fleet as max spot price for the fleet."
+  description = "Max price price for spot instances per hour. This variable will be passed to the create fleet as max spot price for the fleet."
   type        = string
   default     = null
-}
-
-variable "instance_type" {
-  description = "[DEPRECATED] See instance_types."
-  type        = string
-  default     = null
-
-  validation {
-    condition     = anytrue([var.instance_type == null])
-    error_message = "Deprecated, replaced by `instance_types`."
-  }
 }
 
 variable "instance_types" {
@@ -484,7 +485,7 @@ variable "instance_types" {
 }
 
 variable "repository_white_list" {
-  description = "List of repositories allowed to use the github app"
+  description = "List of github repository full names (owner/repo_name) that will be allowed to use the github app. Leave empty for no filtering."
   type        = list(string)
   default     = []
 }
@@ -495,7 +496,7 @@ variable "delay_webhook_event" {
   default     = 30
 }
 variable "job_queue_retention_in_seconds" {
-  description = "The number of seconds the job is held in the queue before it is purged"
+  description = "The number of seconds the job is held in the queue before it is purged."
   type        = number
   default     = 86400
 }
@@ -528,14 +529,10 @@ variable "runner_egress_rules" {
 variable "log_type" {
   description = "Logging format for lambda logging. Valid values are 'json', 'pretty', 'hidden'. "
   type        = string
-  default     = "pretty"
+  default     = null
   validation {
-    condition = anytrue([
-      var.log_type == "json",
-      var.log_type == "pretty",
-      var.log_type == "hidden",
-    ])
-    error_message = "`log_type` value not valid. Valid values are 'json', 'pretty', 'hidden'."
+    condition     = var.log_type == null
+    error_message = "DEPRECATED: `log_type` is not longer supported."
   }
 }
 
@@ -557,14 +554,8 @@ variable "log_level" {
   }
 }
 
-variable "runner_enable_workflow_job_labels_check" {
-  description = "If set to true all labels in the workflow job even are matched against the custom labels and GitHub labels (os, architecture and `self-hosted`). When the labels are not matching the event is dropped at the webhook."
-  type        = bool
-  default     = false
-}
-
-variable "runner_enable_workflow_job_labels_check_all" {
-  description = "If set to true all labels in the workflow job must match the GitHub labels (os, architecture and `self-hosted`). When false if __any__ label matches it will trigger the webhook. `runner_enable_workflow_job_labels_check` must be true for this to take effect."
+variable "enable_runner_workflow_job_labels_check_all" {
+  description = "If set to true all labels in the workflow job must match the GitHub labels (os, architecture and `self-hosted`). When false if __any__ label matches it will trigger the webhook."
   type        = bool
   default     = true
 }
@@ -593,13 +584,13 @@ variable "enable_ephemeral_runners" {
 }
 
 variable "enable_job_queued_check" {
-  description = "Only scale if the job event received by the scale up lambda is is in the state queued. By default enabled for non ephemeral runners and disabled for ephemeral. Set this variable to overwrite the default behavior."
+  description = "Only scale if the job event received by the scale up lambda is in the queued state. By default enabled for non ephemeral runners and disabled for ephemeral. Set this variable to overwrite the default behavior."
   type        = bool
   default     = null
 }
 
 variable "enable_managed_runner_security_group" {
-  description = "Enabling the default managed security group creation. Unmanaged security groups can be specified via `runner_additional_security_group_ids`."
+  description = "Enables creation of the default managed security group. Unmanaged security groups can be specified via `runner_additional_security_group_ids`."
   type        = bool
   default     = true
 }
@@ -624,8 +615,8 @@ variable "lambda_principals" {
   default = []
 }
 
-variable "fifo_build_queue" {
-  description = "Enable a FIFO queue to remain the order of events received by the webhook. Suggest to set to true for repo level runners."
+variable "enable_fifo_build_queue" {
+  description = "Enable a FIFO queue to keep the order of events received by the webhook. Recommended for repo level runners."
   type        = bool
   default     = false
 }
@@ -675,7 +666,7 @@ variable "pool_lambda_reserved_concurrent_executions" {
 }
 
 variable "pool_config" {
-  description = "The configuration for updating the pool. The `pool_size` to adjust to by the events triggered by the `schedule_expression`. For example you can configure a cron expression for week days to adjust the pool to 10 and another expression for the weekend to adjust the pool to 1."
+  description = "The configuration for updating the pool. The `pool_size` to adjust to by the events triggered by the `schedule_expression`. For example you can configure a cron expression for weekdays to adjust the pool to 10 and another expression for the weekend to adjust the pool to 1."
   type = list(object({
     schedule_expression = string
     size                = number
@@ -690,7 +681,7 @@ variable "aws_partition" {
 }
 
 variable "disable_runner_autoupdate" {
-  description = "Disable the auto update of the github runner agent. Be-aware there is a grace period of 30 days, see also the [GitHub article](https://github.blog/changelog/2022-02-01-github-actions-self-hosted-runners-can-now-disable-automatic-updates/)"
+  description = "Disable the auto update of the github runner agent. Be aware there is a grace period of 30 days, see also the [GitHub article](https://github.blog/changelog/2022-02-01-github-actions-self-hosted-runners-can-now-disable-automatic-updates/)"
   type        = bool
   default     = false
 }
@@ -698,13 +689,13 @@ variable "disable_runner_autoupdate" {
 variable "lambda_runtime" {
   description = "AWS Lambda runtime."
   type        = string
-  default     = "nodejs16.x"
+  default     = "nodejs18.x"
 }
 
 variable "lambda_architecture" {
   description = "AWS Lambda architecture. Lambda functions using Graviton processors ('arm64') tend to have better price/performance than 'x86_64' functions. "
   type        = string
-  default     = "x86_64"
+  default     = "arm64"
   validation {
     condition     = contains(["arm64", "x86_64"], var.lambda_architecture)
     error_message = "`lambda_architecture` value is not valid, valid values are: `arm64` and `x86_64`."
@@ -712,7 +703,7 @@ variable "lambda_architecture" {
 }
 
 variable "enable_workflow_job_events_queue" {
-  description = "Enabling this experimental feature will create a secondory sqs queue to wich a copy of the workflow_job event will be delivered."
+  description = "Enabling this experimental feature will create a secondory sqs queue to which a copy of the workflow_job event will be delivered."
   type        = bool
   default     = false
 }
@@ -734,6 +725,12 @@ variable "enable_runner_binaries_syncer" {
   description = "Option to disable the lambda to sync GitHub runner distribution, useful when using a pre-build AMI."
   type        = bool
   default     = true
+}
+
+variable "enable_event_rule_binaries_syncer" {
+  type        = bool
+  default     = true
+  description = "Option to disable EventBridge Lambda trigger for the binary syncer, useful to stop automatic updates of binary distribution."
 }
 
 variable "queue_encryption" {
@@ -758,4 +755,48 @@ variable "enable_user_data_debug_logging_runner" {
   description = "Option to enable debug logging for user-data, this logs all secrets as well."
   type        = bool
   default     = false
+}
+
+variable "ssm_paths" {
+  description = "The root path used in SSM to store configuration and secrets."
+  type = object({
+    root       = optional(string, "github-action-runners")
+    app        = optional(string, "app")
+    runners    = optional(string, "runners")
+    use_prefix = optional(bool, true)
+  })
+  default = {}
+}
+
+variable "runner_name_prefix" {
+  description = "The prefix used for the GitHub runner name. The prefix will be used in the default start script to prefix the instance name when register the runner in GitHub. The value is availabe via an EC2 tag 'ghr:runner_name_prefix'."
+  type        = string
+  default     = ""
+  validation {
+    condition     = length(var.runner_name_prefix) <= 45
+    error_message = "The prefix used for the GitHub runner name must be less than 32 characters. AWS instances id are 17 chars, https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/resource-ids.html"
+  }
+}
+
+variable "lambda_tracing_mode" {
+  description = "Enable X-Ray tracing for the lambda functions."
+  type        = string
+  default     = null
+}
+
+variable "runner_credit_specification" {
+  description = "The credit option for CPU usage of a T instance. Can be unset, \"standard\" or \"unlimited\"."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.runner_credit_specification == null ? true : contains(["standard", "unlimited"], var.runner_credit_specification)
+    error_message = "Valid values for runner_credit_specification are (null, \"standard\", \"unlimited\")."
+  }
+}
+
+variable "enable_jit_config" {
+  description = "Overwrite the default behavior for JIT configuration. By default JIT configuration is enabled for ephemeral runners and disabled for non-ephemeral runners. In case of GHES check first if the JIT config API is avaialbe. In case you upgradeing from 3.x to 4.x you can set `enable_jit_config` to `false` to avoid a breaking change when having your own AMI."
+  type        = bool
+  default     = null
 }

@@ -2,7 +2,6 @@ variable "config" {
   type = object({
     lambda = object({
       log_level                      = string
-      log_type                       = string
       logging_retention_in_days      = number
       logging_kms_key_id             = string
       reserved_concurrent_executions = number
@@ -29,12 +28,15 @@ variable "config" {
     runner = object({
       disable_runner_autoupdate = bool
       ephemeral                 = bool
-      extra_labels              = string
+      enable_jit_config         = bool
+      boot_time_in_minutes      = number
+      labels                    = string
       launch_template = object({
         name = string
       })
-      group_name = string
-      pool_owner = string
+      group_name  = string
+      name_prefix = string
+      pool_owner  = string
       role = object({
         arn = string
       })
@@ -48,9 +50,15 @@ variable "config" {
       schedule_expression = string
       size                = number
     }))
-    role_permissions_boundary = string
-    kms_key_arn               = string
-    role_path                 = string
+    role_permissions_boundary            = string
+    kms_key_arn                          = string
+    ami_kms_key_arn                      = string
+    role_path                            = string
+    ssm_token_path                       = string
+    ssm_config_path                      = string
+    ami_id_ssm_parameter_name            = string
+    ami_id_ssm_parameter_read_policy_arn = string
+    arn_ssm_parameters_path_config       = string
   })
 }
 
@@ -58,4 +66,10 @@ variable "aws_partition" {
   description = "(optional) partition for the arn if not 'aws'"
   type        = string
   default     = "aws"
+}
+
+variable "lambda_tracing_mode" {
+  description = "Enable X-Ray tracing for the lambda functions."
+  type        = string
+  default     = null
 }

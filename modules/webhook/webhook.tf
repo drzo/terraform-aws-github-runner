@@ -13,20 +13,32 @@ resource "aws_lambda_function" "webhook" {
 
   environment {
     variables = {
-      ENABLE_WORKFLOW_JOB_LABELS_CHECK = var.enable_workflow_job_labels_check
-      WORKFLOW_JOB_LABELS_CHECK_ALL    = var.workflow_job_labels_check_all
-      ENVIRONMENT                      = var.prefix
-      LOG_LEVEL                        = var.log_level
-      LOG_TYPE                         = var.log_type
-      REPOSITORY_WHITE_LIST            = jsonencode(var.repository_white_list)
-      RUNNER_LABELS                    = jsonencode(split(",", lower(var.runner_labels)))
-      SQS_URL_WEBHOOK                  = var.sqs_build_queue.id
-      SQS_IS_FIFO                      = var.sqs_build_queue_fifo
-      SQS_WORKFLOW_JOB_QUEUE           = try(var.sqs_workflow_job_queue, null) != null ? var.sqs_workflow_job_queue.id : ""
+      ENVIRONMENT                         = var.prefix
+      LOG_LEVEL                           = var.log_level
+      POWERTOOLS_LOGGER_LOG_EVENT         = var.log_level == "debug" ? "true" : "false"
+      PARAMETER_GITHUB_APP_WEBHOOK_SECRET = var.github_app_parameters.webhook_secret.name
+      REPOSITORY_WHITE_LIST               = jsonencode(var.repository_white_list)
+      RUNNER_CONFIG                       = jsonencode([for k, v in var.runner_config : v])
+      SQS_WORKFLOW_JOB_QUEUE              = try(var.sqs_workflow_job_queue, null) != null ? var.sqs_workflow_job_queue.id : ""
+    }
+  }
+
+  dynamic "vpc_config" {
+    for_each = var.lambda_subnet_ids != null && var.lambda_security_group_ids != null ? [true] : []
+    content {
+      security_group_ids = var.lambda_security_group_ids
+      subnet_ids         = var.lambda_subnet_ids
     }
   }
 
   tags = var.tags
+
+  dynamic "tracing_config" {
+    for_each = var.lambda_tracing_mode != null ? [true] : []
+    content {
+      mode = var.lambda_tracing_mode
+    }
+  }
 }
 
 resource "aws_cloudwatch_log_group" "webhook" {
@@ -71,12 +83,19 @@ resource "aws_iam_role_policy" "webhook_logging" {
   })
 }
 
+resource "aws_iam_role_policy_attachment" "webhook_vpc_execution_role" {
+  count      = length(var.lambda_subnet_ids) > 0 ? 1 : 0
+  role       = aws_iam_role.webhook_lambda.name
+  policy_arn = "arn:${var.aws_partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
 resource "aws_iam_role_policy" "webhook_sqs" {
   name = "${var.prefix}-lambda-webhook-publish-sqs-policy"
   role = aws_iam_role.webhook_lambda.name
 
   policy = templatefile("${path.module}/policies/lambda-publish-sqs-policy.json", {
-    sqs_resource_arn = var.sqs_build_queue.arn
+    sqs_resource_arns = jsonencode([for k, v in var.runner_config : v.arn])
+    kms_key_arn       = var.kms_key_arn != null ? var.kms_key_arn : ""
   })
 }
 
@@ -86,7 +105,8 @@ resource "aws_iam_role_policy" "webhook_workflow_job_sqs" {
   role  = aws_iam_role.webhook_lambda.name
 
   policy = templatefile("${path.module}/policies/lambda-publish-sqs-policy.json", {
-    sqs_resource_arn = var.sqs_workflow_job_queue.arn
+    sqs_resource_arns = jsonencode([var.sqs_workflow_job_queue.arn])
+    kms_key_arn       = var.kms_key_arn != null ? var.kms_key_arn : ""
   })
 }
 
@@ -95,7 +115,12 @@ resource "aws_iam_role_policy" "webhook_ssm" {
   role = aws_iam_role.webhook_lambda.name
 
   policy = templatefile("${path.module}/policies/lambda-ssm.json", {
-    github_app_webhook_secret_arn = var.github_app_webhook_secret_arn,
-    kms_key_arn                   = var.kms_key_arn != null ? var.kms_key_arn : ""
+    github_app_webhook_secret_arn = var.github_app_parameters.webhook_secret.arn,
   })
+}
+
+resource "aws_iam_role_policy" "xray" {
+  count  = var.lambda_tracing_mode != null ? 1 : 0
+  policy = data.aws_iam_policy_document.lambda_xray[0].json
+  role   = aws_iam_role.webhook_lambda.name
 }

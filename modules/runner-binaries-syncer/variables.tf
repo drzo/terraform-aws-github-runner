@@ -1,8 +1,3 @@
-variable "aws_region" {
-  description = "AWS region."
-  type        = string
-}
-
 variable "tags" {
   description = "Map of tags that will be added to created resources. By default resources will be tagged with name and environment."
   type        = map(string)
@@ -54,11 +49,17 @@ variable "s3_logging_bucket_prefix" {
   type        = string
   default     = null
 
-  # Make sure the bucket name only contains legal characters
+  # Make sure the bucket prefix only contains legal characters
   validation {
-    error_message = "Only lowercase alphanumeric characters and hyphens allowed in the bucket name."
-    condition     = var.s3_logging_bucket_prefix == null || can(regex("^[a-z0-9-]*$", var.s3_logging_bucket_prefix))
+    error_message = "Only alphanumeric characters, hyphens followed by single slashes allowed in the bucket prefix."
+    condition     = var.s3_logging_bucket_prefix == null || can(regex("^(([a-zA-Z0-9-])+(\\/?))*$", var.s3_logging_bucket_prefix))
   }
+}
+
+variable "enable_event_rule_binaries_syncer" {
+  type        = bool
+  default     = true
+  description = "Option to disable EventBridge Lambda trigger for the binary syncer, useful to stop automatic updates of binary distribution"
 }
 
 variable "lambda_schedule_expression" {
@@ -118,7 +119,7 @@ variable "runner_architecture" {
 variable "logging_retention_in_days" {
   description = "Specifies the number of days you want to retain log events for the lambda log group. Possible values are: 0, 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, and 3653."
   type        = number
-  default     = 7
+  default     = 180
 }
 
 variable "logging_kms_key_id" {
@@ -140,16 +141,19 @@ variable "runner_allow_prerelease_binaries" {
 
 variable "lambda_s3_bucket" {
   description = "S3 bucket from which to specify lambda functions. This is an alternative to providing local files directly."
+  type        = string
   default     = null
 }
 
 variable "syncer_lambda_s3_key" {
   description = "S3 key for syncer lambda function. Required if using S3 bucket to specify lambdas."
+  type        = string
   default     = null
 }
 
 variable "syncer_lambda_s3_object_version" {
   description = "S3 object version for syncer lambda function. Useful if S3 versioning is enabled on source bucket."
+  type        = string
   default     = null
 }
 
@@ -165,17 +169,19 @@ variable "lambda_security_group_ids" {
   default     = []
 }
 
+variable "aws_partition" {
+  description = "(optional) partition for the base arn if not 'aws'"
+  type        = string
+  default     = "aws"
+}
+
 variable "log_type" {
   description = "Logging format for lambda logging. Valid values are 'json', 'pretty', 'hidden'. "
   type        = string
-  default     = "pretty"
+  default     = null
   validation {
-    condition = anytrue([
-      var.log_type == "json",
-      var.log_type == "pretty",
-      var.log_type == "hidden",
-    ])
-    error_message = "`log_type` value not valid. Valid values are 'json', 'pretty', 'hidden'."
+    condition     = var.log_type == null
+    error_message = "DEPRECATED: `log_type` is not longer supported."
   }
 }
 
@@ -185,22 +191,36 @@ variable "log_level" {
   default     = "info"
   validation {
     condition = anytrue([
-      var.log_level == "silly",
-      var.log_level == "trace",
       var.log_level == "debug",
       var.log_level == "info",
       var.log_level == "warn",
       var.log_level == "error",
-      var.log_level == "fatal",
     ])
-    error_message = "`log_level` value not valid. Valid values are 'silly', 'trace', 'debug', 'info', 'warn', 'error', 'fatal'."
+    error_message = "`log_level` value not valid. Valid values are 'debug', 'info', 'warn', 'error'."
   }
+  validation {
+    condition     = !contains(["silly", "trace", "fatal"], var.log_level)
+    error_message = "PLEASE MIGRATE: The following log levels: 'silly', 'trace' and 'fatal' are not longeer supported."
+  }
+
 }
 
 variable "server_side_encryption_configuration" {
-  description = "Map containing server-side encryption configuration."
+  description = "Map containing server-side encryption configuration for runner-binaries S3 bucket."
   type        = any
-  default     = {}
+  default = {
+    rule = {
+      apply_server_side_encryption_by_default = {
+        sse_algorithm = "AES256"
+      }
+    }
+  }
+}
+
+variable "s3_versioning" {
+  description = "Status of S3 versioning for runner-binaries S3 bucket."
+  type        = string
+  default     = "Disabled"
 }
 
 variable "lambda_principals" {
@@ -215,15 +235,21 @@ variable "lambda_principals" {
 variable "lambda_runtime" {
   description = "AWS Lambda runtime."
   type        = string
-  default     = "nodejs16.x"
+  default     = "nodejs18.x"
 }
 
 variable "lambda_architecture" {
   description = "AWS Lambda architecture. Lambda functions using Graviton processors ('arm64') tend to have better price/performance than 'x86_64' functions. "
   type        = string
-  default     = "x86_64"
+  default     = "arm64"
   validation {
     condition     = contains(["arm64", "x86_64"], var.lambda_architecture)
     error_message = "`lambda_architecture` value is not valid, valid values are: `arm64` and `x86_64`."
   }
+}
+
+variable "lambda_tracing_mode" {
+  description = "Enable X-Ray tracing for the lambda functions."
+  type        = string
+  default     = null
 }
